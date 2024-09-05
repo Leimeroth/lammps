@@ -27,7 +27,9 @@
 #include "comm.h"
 #include "error.h"
 #include "force.h"
+#include "modify.h"
 #include "output.h"
+#include "pointers.h"
 #include "timer.h"
 #include "universe.h"
 #include "update.h"
@@ -150,7 +152,7 @@ int MinFire::iterate(int maxiter)
 template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
 {
   bigint ntimestep;
-  double vmax,vdotf,vdotfall,vdotv,vdotvall,fdotf,fdotfall;
+  double vmax,vdotf,vdotfall,vdotv,vdotvall,fdotf,fdotfall,alpha_box;
   double scale1,scale2;
   double dtvone,dtv,dtf,dtfm;
   double abc;
@@ -208,7 +210,7 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     double *rmass = atom->rmass;
     double *mass = atom->mass;
     int *type = atom->type;
-
+    
     // vdotfall = v dot f
 
     vdotf = 0.0;
@@ -366,6 +368,15 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     }
 
     MPI_Allreduce(&dtvone,&dtv,1,MPI_DOUBLE,MPI_MIN,world);
+
+    // How should alpha be properly set for the damped dynamics? In ASE it seems to be virial multiplied with an empirical factor
+    // As it works reasonably well this is tried here, but some damping could be necessary to prevent oscillations?
+    modify->min_store();
+    alpha_box = MIN(modify->max_alpha(fextra), dtvone*scale1);
+    //alpha_box = MIN(modify->max_alpha(fextra)/atom->natoms, 1);
+    //alpha_box = 1e-5;
+    // Should box be relaxed before or after atom positions? In min_linesearch it is done before
+    if (nextra_global) modify->min_step(alpha_box, fextra);
 
     // reset velocities when necessary
 
@@ -616,4 +627,4 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
   }
 
   return MAXITER;
-}
+};

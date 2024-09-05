@@ -266,14 +266,10 @@ void Min::setup(int flag)
   // remove these restriction eventually
 
   if (searchflag == 0) {
-    if (nextra_global)
-      error->all(FLERR,
-                 "Cannot use a damped dynamics min style with fix box/relax");
     if (nextra_atom)
       error->all(FLERR,
                  "Cannot use a damped dynamics min style with per-atom DOF");
   }
-
   if (strcmp(update->minimize_style,"hftn") == 0) {
     if (nextra_global)
       error->all(FLERR, "Cannot use hftn min style with fix box/relax");
