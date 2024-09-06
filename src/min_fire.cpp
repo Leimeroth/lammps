@@ -369,14 +369,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
 
     MPI_Allreduce(&dtvone,&dtv,1,MPI_DOUBLE,MPI_MIN,world);
 
-    // How should alpha be properly set for the damped dynamics? In ASE it seems to be virial multiplied with an empirical factor
-    // As it works reasonably well this is tried here, but some damping could be necessary to prevent oscillations?
-    modify->min_store();
-    alpha_box = MIN(modify->max_alpha(fextra), dtvone*scale1);
-    //alpha_box = MIN(modify->max_alpha(fextra)/atom->natoms, 1);
-    //alpha_box = 1e-5;
-    // Should box be relaxed before or after atom positions? In min_linesearch it is done before
-    if (nextra_global) modify->min_step(alpha_box, fextra);
 
     // reset velocities when necessary
 
@@ -393,7 +385,15 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       MPI_Allreduce(&dtvone,&dtv,1,MPI_DOUBLE,MPI_MIN,universe->uworld);
     }
 
-    // Adapt to requested integration style for dynamics
+    // How should alpha be properly set for the damped dynamics? What is a mass for cell parameters?
+    // Should box be relaxed before or after atom positions? In min_linesearch it is done before -> do it like this here
+    if (nextra_global) {
+      modify->min_store();
+      alpha_box = MIN(modify->max_alpha(fextra), dtvone*scale1); // this seems to work well
+      modify->min_step(alpha_box, fextra);
+    }
+    // Adapt to requested integration style for dynamics?
+    
 
     if ((INTEGRATOR == EULERIMPLICIT) || (INTEGRATOR == LEAPFROG)) {
 
