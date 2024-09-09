@@ -152,11 +152,17 @@ int MinFire::iterate(int maxiter)
 template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
 {
   bigint ntimestep;
-  double vmax,vdotf,vdotfall,vdotv,vdotvall,fdotf,fdotfall,alpha_box;
+  double vmax,vdotf,vdotfall,vdotv,vdotvall,fdotf,fdotfall,alpha_box,vdotfbox,vdotvbox,fdotfbox;
   double scale1,scale2;
-  double dtvone,dtv,dtf,dtfm;
+  double dtvone,dtv,dtf,dtfm,dtbox;
   double abc;
+  double *hextra, *vbox;
   int flag,flagall;
+  if (nextra_global) {
+    hextra = vbox = new double[nextra_global];
+    for (int i=0; i<nextra_global; i++) hextra[i] = vbox[i] = 0;
+    dtbox = dt;
+  }
 
   alpha_final = 0.0;
 
@@ -168,6 +174,10 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     double **v = atom->v;
     double *rmass = atom->rmass;
     double *mass = atom->mass;
+    // why not:
+    //double *mass = atom->rmass;
+    //if (!mass) mass=atom->mass;
+    // ? Would prevent lots of duplicate code
     int *type = atom->type;
     int nlocal = atom->nlocal;
 
@@ -211,13 +221,22 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     double *mass = atom->mass;
     int *type = atom->type;
     
+    // Cell min similar to ASE.
+    // How should alpha be properly set for the damped dynamics? What is a mass for cell parameters?
+    // Should box be relaxed before or after atom positions? In min_linesearch it is done before -> do it like this here
+    if (nextra_global) modify->min_store();
+    // Adapt to requested integration style?
+
+
     // vdotfall = v dot f
 
     vdotf = 0.0;
     for (int i = 0; i < nlocal; i++)
       vdotf += v[i][0]*f[i][0] + v[i][1]*f[i][1] + v[i][2]*f[i][2];
     MPI_Allreduce(&vdotf,&vdotfall,1,MPI_DOUBLE,MPI_SUM,world);
-
+    if (nextra_global) {
+      for (int i=0; i<nextra_global; i++) vdotfall += fextra[i] * vbox[i];
+    }
     // sum vdotf over replicas, if necessary
     // this communicator would be invalid for multiprocess replicas
 
@@ -240,7 +259,9 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       for (int i = 0; i < nlocal; i++)
         vdotv += v[i][0]*v[i][0] + v[i][1]*v[i][1] + v[i][2]*v[i][2];
       MPI_Allreduce(&vdotv,&vdotvall,1,MPI_DOUBLE,MPI_SUM,world);
-
+      if (nextra_global) {
+        for (int i=0; i<nextra_global; i++) vdotvall += vbox[i] * vbox[i];
+      }
       // sum vdotv over replicas, if necessary
       // this communicator would be invalid for multiprocess replicas
 
@@ -253,7 +274,9 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       for (int i = 0; i < nlocal; i++)
         fdotf += f[i][0]*f[i][0] + f[i][1]*f[i][1] + f[i][2]*f[i][2];
       MPI_Allreduce(&fdotf,&fdotfall,1,MPI_DOUBLE,MPI_SUM,world);
-
+      if (nextra_global) {
+        for (int i=0; i<nextra_global; i++) fdotfall += fextra[i] * fextra[i];
+      }
       // sum fdotf over replicas, if necessary
       // this communicator would be invalid for multiprocess replicas
 
@@ -321,10 +344,14 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           x[i][1] -= 0.5 * dt * v[i][1];
           x[i][2] -= 0.5 * dt * v[i][2];
         }
+        if (nextra_global) modify->min_step(-0.5*dt, vbox);
       }
 
       for (int i = 0; i < nlocal; i++)
         v[i][0] = v[i][1] = v[i][2] = 0.0;
+      if (nextra_global){
+        for (int i = 0; i < nextra_global; i++)vbox[i] = 0.0;
+      }
       flagv0 = 1;
     }
 
@@ -351,6 +378,9 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
             v[i][1] = dtfm * f[i][1];
             v[i][2] = dtfm * f[i][2];
           }
+        }
+        if (nextra_global) {
+          for (int i; i<nextra_global;i++) vbox[i] = dtf * fextra[i];
         }
       }
     }
@@ -385,15 +415,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       MPI_Allreduce(&dtvone,&dtv,1,MPI_DOUBLE,MPI_MIN,universe->uworld);
     }
 
-    // How should alpha be properly set for the damped dynamics? What is a mass for cell parameters?
-    // Should box be relaxed before or after atom positions? In min_linesearch it is done before -> do it like this here
-    if (nextra_global) {
-      modify->min_store();
-      alpha_box = MIN(modify->max_alpha(fextra), dtvone*scale1); // this seems to work well
-      modify->min_step(alpha_box, fextra);
-    }
-    // Adapt to requested integration style for dynamics?
-    
 
     if ((INTEGRATOR == EULERIMPLICIT) || (INTEGRATOR == LEAPFROG)) {
 
