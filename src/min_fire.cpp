@@ -197,6 +197,9 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
         v[i][2] = dtfm * f[i][2];
       }
     }
+    if (nextra_global) {
+      for (int i=0; i<nextra_global; i++) vbox[i]=dtf*fextra[i];
+    }
   }
 
   for (int iter = 0; iter < maxiter; iter++) {
@@ -349,7 +352,7 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       for (int i = 0; i < nlocal; i++)
         v[i][0] = v[i][1] = v[i][2] = 0.0;
       if (nextra_global){
-        for (int i = 0; i < nextra_global; i++)vbox[i] = 0.0;
+        for (int i = 0; i < nextra_global; i++) vbox[i] = 0.0;
       }
       flagv0 = 1;
     }
@@ -526,6 +529,14 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           x[i][1] += dtv * v[i][1];
           x[i][2] += dtv * v[i][2];
         }
+      } 
+      if (nextra_global) {
+        for (int i = 0; i<nextra_global; i++) vbox[i]+= dtf * fextra[i];
+        if (vdotfall > 0.0) {
+          for (int i = 0; i<nextra_global; i++) vbox[i] = scale1* vbox[i] + scale2*fextra[i];
+        }
+        alpha_box=MIN(dtv,modify->max_alpha(vbox));
+        modify->min_step(alpha_box, vbox);
       }
 
       eprevious = ecurrent;
@@ -546,6 +557,9 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           v[i][1] += dtfm * f[i][1];
           v[i][2] += dtfm * f[i][2];
         }
+      }
+      if (nextra_global) {
+        for (int i=0; i<nextra_global;i++) vbox[i] += dtf*fextra[i];
       }
 
       // Standard Euler integration
@@ -596,6 +610,12 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           v[i][1] += dtfm * f[i][1];
           v[i][2] += dtfm * f[i][2];
         }
+      }
+      if (nextra_global) {
+        if (vdotfall > 0.0) for (int i=0;i<nextra_global;i++) vbox[i] = scale1*vbox[i] + scale2*fextra[i];
+        alpha_box = MIN(dtv,modify->max_alpha(vbox));
+        modify->min_step(alpha_box,vbox);
+        for (int i=0;i<nextra_global;i++) vbox[i] += dtf*fextra[i];
       }
 
       eprevious = ecurrent;
