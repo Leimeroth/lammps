@@ -156,11 +156,11 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
   double scale1,scale2;
   double dtvone,dtv,dtf,dtfm,dtbox;
   double abc;
-  double *hextra, *vbox;
+  double *vbox;
   int flag,flagall;
   if (nextra_global) {
-    hextra = vbox = new double[nextra_global];
-    for (int i=0; i<nextra_global; i++) hextra[i] = vbox[i] = 0;
+    vbox = new double[nextra_global];
+    for (int i=0; i<nextra_global; i++) vbox[i] = 0;
     dtbox = dt;
   }
 
@@ -174,10 +174,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     double **v = atom->v;
     double *rmass = atom->rmass;
     double *mass = atom->mass;
-    // why not:
-    //double *mass = atom->rmass;
-    //if (!mass) mass=atom->mass;
-    // ? Would prevent lots of duplicate code
     int *type = atom->type;
     int nlocal = atom->nlocal;
 
@@ -344,7 +340,10 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           x[i][1] -= 0.5 * dt * v[i][1];
           x[i][2] -= 0.5 * dt * v[i][2];
         }
-        if (nextra_global) modify->min_step(-0.5*dt, vbox);
+        if (nextra_global) {
+          alpha_box = MIN(dt, modify->max_alpha(vbox));
+          modify->min_step(-0.5*alpha_box, vbox);
+        }
       }
 
       for (int i = 0; i < nlocal; i++)
@@ -405,6 +404,9 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     if (flagv0) {
       for (int i = 0; i < nlocal; i++)
         v[i][0] = v[i][1] = v[i][2] = 0.0;
+      if (nextra_global){
+        for (int i = 0; i < nextra_global; i++)vbox[i] = 0.0;
+      }
     }
 
     // min dtv over replicas, if necessary
@@ -462,6 +464,14 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           x[i][1] += dtv * v[i][1];
           x[i][2] += dtv * v[i][2];
         }
+      }
+      if (nextra_global) {
+        for (int i = 0; i<nextra_global; i++) vbox[i]+= dtf * fextra[i];
+        if (vdotfall > 0.0) {
+          for (int i = 0; i<nextra_global; i++) vbox[i] = scale1* vbox[i] + scale2*fextra[i];
+        }
+        alpha_box=MIN(dtv,modify->max_alpha(vbox));
+        modify->min_step(alpha_box, vbox);
       }
 
       eprevious = ecurrent;
