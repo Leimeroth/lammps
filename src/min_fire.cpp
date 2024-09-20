@@ -27,6 +27,7 @@
 #include "comm.h"
 #include "error.h"
 #include "force.h"
+#include "min.h"
 #include "modify.h"
 #include "output.h"
 #include "pointers.h"
@@ -152,16 +153,19 @@ int MinFire::iterate(int maxiter)
 template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
 {
   bigint ntimestep;
-  double vmax,vdotf,vdotfall,vdotv,vdotvall,fdotf,fdotfall,alpha_box,vdotfbox,vdotvbox,fdotfbox;
+  double vmax,vdotf,vdotfall,vdotv,vdotvall,fdotf,fdotfall;
   double scale1,scale2;
-  double dtvone,dtv,dtf,dtfm,dtbox;
+  double dtvone,dtv,dtf,dtfm;
   double abc;
-  double *vbox;
   int flag,flagall;
+  // basically separate box relaxation
+  double alpha_box,vdotfbox,vdotvbox,fdotfbox,sbox1,sbox2,dtbox,dtvbox,dtfbox,*vbox;
+  int vdotfbox_negative,last_negativebox,flagvbox0;
   if (nextra_global) {
     vbox = new double[nextra_global];
     for (int i=0; i<nextra_global; i++) vbox[i] = 0;
     dtbox = dt;
+    alpha_box = alpha0;
   }
 
   alpha_final = 0.0;
@@ -198,7 +202,8 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       }
     }
     if (nextra_global) {
-      for (int i=0; i<nextra_global; i++) vbox[i]=dtf*fextra[i];
+      dtfbox = -0.5*dt*force->ftm2v;
+      for (int i=0; i<nextra_global; i++) vbox[i]=dtfbox*fextra[i];
     }
   }
 
@@ -219,13 +224,85 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     double *rmass = atom->rmass;
     double *mass = atom->mass;
     int *type = atom->type;
-    
-    // Cell min similar to ASE.
-    // How should alpha be properly set for the damped dynamics? What is a mass for cell parameters?
-    // Should box be relaxed before or after atom positions? In min_linesearch it is done before -> do it like this here
-    if (nextra_global) modify->min_store();
-    // Adapt to requested integration style?
 
+    if (nextra_global) {
+      modify->min_store();
+      vdotfbox=0.0;
+      for (int i=0; i<nextra_global; i++) vdotfbox += fextra[i] * vbox[i];
+      if (vdotfbox>0.0){
+        vdotfbox_negative = 0;
+        vdotvbox = fdotfbox = 0.0;
+        for (int i=0; i<nextra_global; i++) {
+          vdotvbox += vbox[i] * vbox[i];
+          fdotfbox += fextra[i] * fextra[i];
+        }    
+        // todo ABCFLAG
+        sbox1 = 1.0 - alpha_box;
+        if (fdotf <= 1e-20) sbox2 = 0.0;
+        else sbox2 = alpha * sqrt(vdotv/fdotf);
+        // maybe set dt to modify->max_alpha?
+        if (ntimestep - last_negativebox > delaystep) {
+          dtbox = MIN(dtbox*dtgrow,dtmax);
+          alpha_box *= alphashrink;
+        }
+      } else {
+        last_negativebox = ntimestep;
+        if (ntimestep - ntimestep_start > delaystep && (!delaystep_start_flag)) {
+          alpha_box = alpha0;
+          if (dtbox*dtshrink>=dtmin) {
+            dtbox *=dtshrink;
+          }
+        }
+        // Stopping criterion for cell min stuck in local basin
+        vdotfbox_negative++;
+        if (max_vdotf_negatif > 0 && vdotfbox_negative > max_vdotf_negatif)
+          return MAXVDOTF;
+        
+        if (halfstepback_flag) {
+          modify->min_step(-0.5*MIN(dt, modify->max_alpha(vbox)), vbox);
+        }
+
+        for (int i = 0; i < nextra_global; i++) vbox[i] = 0.0;
+        flagvbox0 = 1;
+      }
+
+      // Seems unncessary to get velocities here, as vbox is not imited before
+      //if ((!ABCFLAG) && flagvbox0) {
+      //  dtfbox = dtbox * force->ftm2v;
+      //  for (int i; i<nextra_global;i++) vbox[i] = dtfbox * fextra[i];
+      //}
+
+      if (flagvbox0) for (int i; i<nextra_global;i++) vbox[i] = 0.0;
+      
+      if (INTEGRATOR == EULERIMPLICIT || INTEGRATOR==LEAPFROG) {
+        dtfbox = dtvbox * force->ftm2v;
+        for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
+        if (vdotfbox>0.0) {
+          for (int i = 0; i < nextra_global; i++) vbox[i] =  sbox1 * vbox[i] + sbox2 * fextra[i];
+        } 
+        alpha_box=MIN(dtvbox,modify->max_alpha(vbox));
+        modify->min_step(alpha_box, vbox);
+
+      } else if (INTEGRATOR==VERLET) {
+        dtfbox = 0.5* dtvbox * force->ftm2v;
+        for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
+        if (vdotfbox>0.0) {
+          for (int i = 0; i < nextra_global; i++) vbox[i] =  sbox1 * vbox[i] + sbox2 * fextra[i];
+        }
+        alpha_box=MIN(dtvbox,modify->max_alpha(vbox));
+        modify->min_step(alpha_box, vbox);
+        for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
+      
+      } else if (INTEGRATOR==EULEREXPLICIT) {
+        dtfbox = dtvbox * force->ftm2v;
+        if  (vdotfall > 0.0) for (int i = 0; i < nextra_global; i++) vbox[i] = sbox1*vbox[i] + sbox2*fextra[i];
+        alpha_box=MIN(dtvbox,modify->max_alpha(vbox));
+        modify->min_step(alpha_box, vbox);
+        for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
+      }
+      
+      flagvbox0 = 0;
+    }
 
     // vdotfall = v dot f
 
@@ -233,9 +310,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     for (int i = 0; i < nlocal; i++)
       vdotf += v[i][0]*f[i][0] + v[i][1]*f[i][1] + v[i][2]*f[i][2];
     MPI_Allreduce(&vdotf,&vdotfall,1,MPI_DOUBLE,MPI_SUM,world);
-    if (nextra_global) {
-      for (int i=0; i<nextra_global; i++) vdotfall += fextra[i] * vbox[i];
-    }
     // sum vdotf over replicas, if necessary
     // this communicator would be invalid for multiprocess replicas
 
@@ -258,9 +332,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       for (int i = 0; i < nlocal; i++)
         vdotv += v[i][0]*v[i][0] + v[i][1]*v[i][1] + v[i][2]*v[i][2];
       MPI_Allreduce(&vdotv,&vdotvall,1,MPI_DOUBLE,MPI_SUM,world);
-      if (nextra_global) {
-        for (int i=0; i<nextra_global; i++) vdotvall += vbox[i] * vbox[i];
-      }
       // sum vdotv over replicas, if necessary
       // this communicator would be invalid for multiprocess replicas
 
@@ -273,9 +344,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       for (int i = 0; i < nlocal; i++)
         fdotf += f[i][0]*f[i][0] + f[i][1]*f[i][1] + f[i][2]*f[i][2];
       MPI_Allreduce(&fdotf,&fdotfall,1,MPI_DOUBLE,MPI_SUM,world);
-      if (nextra_global) {
-        for (int i=0; i<nextra_global; i++) fdotfall += fextra[i] * fextra[i];
-      }
       // sum fdotf over replicas, if necessary
       // this communicator would be invalid for multiprocess replicas
 
@@ -343,17 +411,10 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           x[i][1] -= 0.5 * dt * v[i][1];
           x[i][2] -= 0.5 * dt * v[i][2];
         }
-        if (nextra_global) {
-          alpha_box = MIN(dt, modify->max_alpha(vbox));
-          modify->min_step(-0.5*alpha_box, vbox);
-        }
       }
 
       for (int i = 0; i < nlocal; i++)
         v[i][0] = v[i][1] = v[i][2] = 0.0;
-      if (nextra_global){
-        for (int i = 0; i < nextra_global; i++) vbox[i] = 0.0;
-      }
       flagv0 = 1;
     }
 
@@ -381,12 +442,8 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
             v[i][2] = dtfm * f[i][2];
           }
         }
-        if (nextra_global) {
-          for (int i; i<nextra_global;i++) vbox[i] = dtf * fextra[i];
-        }
       }
     }
-
     // limit timestep so no particle moves further than dmax
 
     dtvone = dt;
@@ -407,9 +464,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     if (flagv0) {
       for (int i = 0; i < nlocal; i++)
         v[i][0] = v[i][1] = v[i][2] = 0.0;
-      if (nextra_global){
-        for (int i = 0; i < nextra_global; i++)vbox[i] = 0.0;
-      }
     }
 
     // min dtv over replicas, if necessary
@@ -419,7 +473,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       dtvone = dtv;
       MPI_Allreduce(&dtvone,&dtv,1,MPI_DOUBLE,MPI_MIN,universe->uworld);
     }
-
 
     if ((INTEGRATOR == EULERIMPLICIT) || (INTEGRATOR == LEAPFROG)) {
 
@@ -467,14 +520,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           x[i][1] += dtv * v[i][1];
           x[i][2] += dtv * v[i][2];
         }
-      }
-      if (nextra_global) {
-        for (int i = 0; i<nextra_global; i++) vbox[i]+= dtf * fextra[i];
-        if (vdotfall > 0.0) {
-          for (int i = 0; i<nextra_global; i++) vbox[i] = scale1* vbox[i] + scale2*fextra[i];
-        }
-        alpha_box=MIN(dtv,modify->max_alpha(vbox));
-        modify->min_step(alpha_box, vbox);
       }
 
       eprevious = ecurrent;
@@ -529,14 +574,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           x[i][1] += dtv * v[i][1];
           x[i][2] += dtv * v[i][2];
         }
-      } 
-      if (nextra_global) {
-        for (int i = 0; i<nextra_global; i++) vbox[i]+= dtf * fextra[i];
-        if (vdotfall > 0.0) {
-          for (int i = 0; i<nextra_global; i++) vbox[i] = scale1* vbox[i] + scale2*fextra[i];
-        }
-        alpha_box=MIN(dtv,modify->max_alpha(vbox));
-        modify->min_step(alpha_box, vbox);
       }
 
       eprevious = ecurrent;
@@ -557,9 +594,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           v[i][1] += dtfm * f[i][1];
           v[i][2] += dtfm * f[i][2];
         }
-      }
-      if (nextra_global) {
-        for (int i=0; i<nextra_global;i++) vbox[i] += dtf*fextra[i];
       }
 
       // Standard Euler integration
@@ -610,12 +644,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           v[i][1] += dtfm * f[i][1];
           v[i][2] += dtfm * f[i][2];
         }
-      }
-      if (nextra_global) {
-        if (vdotfall > 0.0) for (int i=0;i<nextra_global;i++) vbox[i] = scale1*vbox[i] + scale2*fextra[i];
-        alpha_box = MIN(dtv,modify->max_alpha(vbox));
-        modify->min_step(alpha_box,vbox);
-        for (int i=0;i<nextra_global;i++) vbox[i] += dtf*fextra[i];
       }
 
       eprevious = ecurrent;
