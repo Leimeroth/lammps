@@ -27,6 +27,7 @@
 #include "comm.h"
 #include "error.h"
 #include "force.h"
+#include "lmprestart.h"
 #include "min.h"
 #include "modify.h"
 #include "output.h"
@@ -228,7 +229,7 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     if (nextra_global) {
       modify->min_store();
       vdotfbox=0.0;
-      for (int i=0; i<nextra_global; i++) vdotfbox += fextra[i] * vbox[i];
+      for (int i=0; i<nextra_global; i++) vdotfbox = fextra[i] * vbox[i];
       if (vdotfbox>0.0){
         vdotfbox_negative = 0;
         vdotvbox = fdotfbox = 0.0;
@@ -241,13 +242,13 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
         if (fdotf <= 1e-20) sbox2 = 0.0;
         else sbox2 = alpha * sqrt(vdotv/fdotf);
         // maybe set dt to modify->max_alpha?
-        if (ntimestep - last_negativebox > delaystep) {
+        if (ntimestep - last_negativebox > 0) {
           dtbox = MIN(dtbox*dtgrow,dtmax);
           alpha_box *= alphashrink;
         }
       } else {
         last_negativebox = ntimestep;
-        if (ntimestep - ntimestep_start > delaystep && (!delaystep_start_flag)) {
+        if (ntimestep - ntimestep_start > 0 && (!delaystep_start_flag)) {
           alpha_box = alpha0;
           if (dtbox*dtshrink>=dtmin) {
             dtbox *=dtshrink;
@@ -259,10 +260,11 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           return MAXVDOTF;
         
         if (halfstepback_flag) {
-          modify->min_step(-0.5*MIN(dt, modify->max_alpha(vbox)), vbox);
+          alpha_box = MIN(dt, modify->max_alpha(vbox));
+          modify->min_step(-0.5*alpha_box, vbox);
         }
 
-        for (int i = 0; i < nextra_global; i++) vbox[i] = 0.0;
+        //for (int i = 0; i < nextra_global; i++) vbox[i] = 0.0;
         flagvbox0 = 1;
       }
 
@@ -300,7 +302,7 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
         modify->min_step(alpha_box, vbox);
         for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
       }
-      
+
       flagvbox0 = 0;
     }
 
