@@ -27,7 +27,6 @@
 #include "comm.h"
 #include "error.h"
 #include "force.h"
-#include "lmprestart.h"
 #include "min.h"
 #include "modify.h"
 #include "output.h"
@@ -230,7 +229,6 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       modify->min_store();
       vdotfbox=0.0;
       for (int i=0; i<nextra_global; i++) vdotfbox += fextra[i] * vbox[i];
-      utils::logmesg(lmp, "vdotfbox: _{}\n", vdotfbox);
       if (vdotfbox>0.0){
         vdotfbox_negative = 0;
         vdotvbox = fdotfbox = 0.0;
@@ -248,63 +246,68 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
           alpha_box *= alphashrink;
         }
       } else {
+        int delayflagbox = 1;
         last_negativebox = ntimestep;
-        if (!(ntimestep - ntimestep_start < delaystep && delaystep_start_flag)) {
+        if (ntimestep - ntimestep_start < delaystep && delaystep_start_flag) delayflagbox = 0;
+        if (delayflagbox) {
           alpha_box = alpha0;
           if (dtbox*dtshrink>=dtmin) {
             dtbox *=dtshrink;
           }
         }
+        
         // Stopping criterion for cell min stuck in local basin
         vdotfbox_negative++;
         if (max_vdotf_negatif > 0 && vdotfbox_negative > max_vdotf_negatif)   
           return MAXVDOTF;
         
         if (halfstepback_flag) {
+          //for (int i; i<nextra_global;i++) vbox[i] = dtfbox * fextra[i];
+          //dtvbox = MIN(dtvbox, modify->max_alpha(vbox));
           float tmpbox = MIN(dtvbox, modify->max_alpha(vbox));
           modify->min_step(-0.5*tmpbox, vbox);
+          //modify->min_step(-0.5*dtvbox, vbox);
         }
 
         //for (int i = 0; i < nextra_global; i++) vbox[i] = 0.0;
         flagvbox0 = 1;
       }
-      for (int i=0; i<nextra_global; i++) utils::logmesg(lmp, "vbox[{}]: {}, ", i, vbox[i]);
-      // Seems unncessary to set velocities here, as flagv0 nulls them? velocity limiting is done another way for box relaxation
+
+      
       if ((!ABCFLAG) && flagvbox0) {
         dtfbox = dtbox * force->ftm2v;
-      //  for (int i; i<nextra_global;i++) vbox[i] = dtfbox * fextra[i];
+        for (int i=0; i<nextra_global;i++) vbox[i] = dtfbox * fextra[i];
+        dtvbox = MIN(dtvbox,modify->max_alpha(vbox));
+        //utils::logmesg(lmp, "dtvbox is {}", dtvbox);
       }
-      if (flagvbox0) for (int i; i<nextra_global;i++) vbox[i] = 0.0;
-      
+      if (flagvbox0) for (int i=0; i<nextra_global;i++) vbox[i] = 0.0;
+
+      //for (int i=0; i<nextra_global; i++) utils::logmesg(lmp, "vbox[{}]: {}, ", i, vbox[i]);
       if (INTEGRATOR == EULERIMPLICIT || INTEGRATOR==LEAPFROG) {
         dtfbox = dtvbox * force->ftm2v;
         for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
         if (vdotfbox>0.0) {
           for (int i = 0; i < nextra_global; i++) vbox[i] =  sbox1 * vbox[i] + sbox2 * fextra[i];
         } 
-        float tmpbox = MIN(dtvbox, modify->max_alpha(vbox));
-        modify->min_step(tmpbox, vbox);
+        //float tmpbox = MIN(dtvbox, modify->max_alpha(vbox));
+        modify->min_step(dtvbox, vbox);
       } else if (INTEGRATOR==VERLET) {
         dtfbox = 0.5* dtvbox * force->ftm2v;
         for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
         if (vdotfbox>0.0) {
           for (int i = 0; i < nextra_global; i++) vbox[i] =  sbox1 * vbox[i] + sbox2 * fextra[i];
         }
-        float tmpbox = MIN(dtvbox, modify->max_alpha(vbox));
-        modify->min_step(tmpbox, vbox);
+        modify->min_step(dtvbox, vbox);
         for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
       
       } else if (INTEGRATOR==EULEREXPLICIT) {
         dtfbox = dtvbox * force->ftm2v;
         if  (vdotfall > 0.0) for (int i = 0; i < nextra_global; i++) vbox[i] = sbox1*vbox[i] + sbox2*fextra[i];
-        float tmpbox = MIN(dtvbox, modify->max_alpha(vbox));
-        modify->min_step(tmpbox, vbox);
+        modify->min_step(dtvbox, vbox);
         for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
       }
-
       flagvbox0 = 0;
     }
-
     // vdotfall = v dot f
 
     vdotf = 0.0;
