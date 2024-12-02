@@ -35,7 +35,7 @@
 #include "timer.h"
 #include "universe.h"
 #include "update.h"
-
+#include "utils.h"
 #include <cmath>
 
 using namespace LAMMPS_NS;
@@ -164,8 +164,8 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
   int vdotfbox_negative,last_negativebox,flagvbox0;
   if (nextra_global) {
     vbox = new double[nextra_global];
-    for (int i=0; i<nextra_global; i++) vbox[i] = 0;
-    dtbox = dt;
+    for (int i=0; i<nextra_global; i++) vbox[i] = 0.0;
+    dtbox = dtvbox = dt;
     alpha_box = alpha0;
   }
 
@@ -203,7 +203,7 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       }
     }
     if (nextra_global) {
-      dtfbox = -0.5*dt*force->ftm2v;
+      dtfbox = -0.5*dtbox*force->ftm2v;
       for (int i=0; i<nextra_global; i++) vbox[i]=dtfbox*fextra[i];
     }
   }
@@ -230,6 +230,7 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
       modify->min_store();
       vdotfbox=0.0;
       for (int i=0; i<nextra_global; i++) vdotfbox += fextra[i] * vbox[i];
+      utils::logmesg(lmp, "vdotfbox: _{}\n", vdotfbox);
       if (vdotfbox>0.0){
         vdotfbox_negative = 0;
         vdotvbox = fdotfbox = 0.0;
@@ -242,13 +243,13 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
         if (fdotfbox <= 1e-20) sbox2 = 0.0;
         else sbox2 = alpha_box * sqrt(vdotvbox/fdotfbox);
         // maybe set dt to modify->max_alpha?
-        if (ntimestep - last_negativebox > 0) {
+        if (ntimestep - last_negativebox > delaystep) {
           dtbox = MIN(dtbox*dtgrow,dtmax);
           alpha_box *= alphashrink;
         }
       } else {
         last_negativebox = ntimestep;
-        if (ntimestep - ntimestep_start > 0 && (!delaystep_start_flag)) {
+        if (!(ntimestep - ntimestep_start < delaystep && delaystep_start_flag)) {
           alpha_box = alpha0;
           if (dtbox*dtshrink>=dtmin) {
             dtbox *=dtshrink;
@@ -256,24 +257,23 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
         }
         // Stopping criterion for cell min stuck in local basin
         vdotfbox_negative++;
-        if (max_vdotf_negatif > 0 && vdotfbox_negative > max_vdotf_negatif)
+        if (max_vdotf_negatif > 0 && vdotfbox_negative > max_vdotf_negatif)   
           return MAXVDOTF;
         
         if (halfstepback_flag) {
-          alpha_box = MIN(dt, modify->max_alpha(vbox));
-          modify->min_step(-0.5*alpha_box, vbox);
+          float tmpbox = MIN(dtvbox, modify->max_alpha(vbox));
+          modify->min_step(-0.5*tmpbox, vbox);
         }
 
         //for (int i = 0; i < nextra_global; i++) vbox[i] = 0.0;
         flagvbox0 = 1;
       }
-
-      // Seems unncessary to get velocities here, as vbox is not imited before
-      //if ((!ABCFLAG) && flagvbox0) {
-      //  dtfbox = dtbox * force->ftm2v;
+      for (int i=0; i<nextra_global; i++) utils::logmesg(lmp, "vbox[{}]: {}, ", i, vbox[i]);
+      // Seems unncessary to set velocities here, as flagv0 nulls them? velocity limiting is done another way for box relaxation
+      if ((!ABCFLAG) && flagvbox0) {
+        dtfbox = dtbox * force->ftm2v;
       //  for (int i; i<nextra_global;i++) vbox[i] = dtfbox * fextra[i];
-      //}
-
+      }
       if (flagvbox0) for (int i; i<nextra_global;i++) vbox[i] = 0.0;
       
       if (INTEGRATOR == EULERIMPLICIT || INTEGRATOR==LEAPFROG) {
@@ -282,24 +282,23 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
         if (vdotfbox>0.0) {
           for (int i = 0; i < nextra_global; i++) vbox[i] =  sbox1 * vbox[i] + sbox2 * fextra[i];
         } 
-        alpha_box=MIN(dtvbox,modify->max_alpha(vbox));
-        modify->min_step(alpha_box, vbox);
-
+        float tmpbox = MIN(dtvbox, modify->max_alpha(vbox));
+        modify->min_step(tmpbox, vbox);
       } else if (INTEGRATOR==VERLET) {
         dtfbox = 0.5* dtvbox * force->ftm2v;
         for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
         if (vdotfbox>0.0) {
           for (int i = 0; i < nextra_global; i++) vbox[i] =  sbox1 * vbox[i] + sbox2 * fextra[i];
         }
-        alpha_box=MIN(dtvbox,modify->max_alpha(vbox));
-        modify->min_step(alpha_box, vbox);
+        float tmpbox = MIN(dtvbox, modify->max_alpha(vbox));
+        modify->min_step(tmpbox, vbox);
         for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
       
       } else if (INTEGRATOR==EULEREXPLICIT) {
         dtfbox = dtvbox * force->ftm2v;
         if  (vdotfall > 0.0) for (int i = 0; i < nextra_global; i++) vbox[i] = sbox1*vbox[i] + sbox2*fextra[i];
-        alpha_box=MIN(dtvbox,modify->max_alpha(vbox));
-        modify->min_step(alpha_box, vbox);
+        float tmpbox = MIN(dtvbox, modify->max_alpha(vbox));
+        modify->min_step(tmpbox, vbox);
         for (int i = 0; i < nextra_global; i++) vbox[i] += dtfbox * fextra[i];
       }
 
