@@ -229,7 +229,7 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
     if (nextra_global) {
       modify->min_store();
       vdotfbox=0.0;
-      for (int i=0; i<nextra_global; i++) vdotfbox = fextra[i] * vbox[i];
+      for (int i=0; i<nextra_global; i++) vdotfbox += fextra[i] * vbox[i];
       if (vdotfbox>0.0){
         vdotfbox_negative = 0;
         vdotvbox = fdotfbox = 0.0;
@@ -239,8 +239,8 @@ template <int INTEGRATOR, bool ABCFLAG> int MinFire::run_iterate(int maxiter)
         }    
         // todo ABCFLAG
         sbox1 = 1.0 - alpha_box;
-        if (fdotf <= 1e-20) sbox2 = 0.0;
-        else sbox2 = alpha * sqrt(vdotv/fdotf);
+        if (fdotfbox <= 1e-20) sbox2 = 0.0;
+        else sbox2 = alpha_box * sqrt(vdotvbox/fdotfbox);
         // maybe set dt to modify->max_alpha?
         if (ntimestep - last_negativebox > 0) {
           dtbox = MIN(dtbox*dtgrow,dtmax);
