@@ -232,6 +232,8 @@ action fix_wall_gran_old.cpp fix_wall_gran.cpp
 action fix_wall_gran_old.h fix_wall_gran.h
 action fix_wall_lj93_kokkos.cpp
 action fix_wall_lj93_kokkos.h
+action fix_wall_harmonic_kokkos.cpp
+action fix_wall_harmonic_kokkos.h
 action fix_wall_reflect_kokkos.cpp
 action fix_wall_reflect_kokkos.h
 action fix_wall_region_kokkos.cpp
